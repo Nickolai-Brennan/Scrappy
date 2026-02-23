@@ -25,133 +25,182 @@ However, there are some limitations and additional responsibilities to be aware 
 
 Self-hosting Firecrawl is ideal for those who need full control over their scraping and data processing environments but comes with the trade-off of additional maintenance and configuration efforts.
 
-## Steps
+## Deploying on an Ubuntu VPS
 
-1. First, start by installing the dependencies
+The steps below walk you through a production-ready deployment on a fresh Ubuntu 22.04 / 24.04 server.
 
-- Docker [instructions](https://docs.docker.com/get-docker/)
+### 1. Install Docker and Docker Compose
 
+```bash
+# Update package index and install prerequisites
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg lsb-release
 
-2. Set environment variables
+# Add Docker's official GPG key and repository
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
-Create an `.env` in the root directory using the template below.
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-`.env:`
-```
-# ===== Required ENVS ======
-PORT=3002
-HOST=0.0.0.0
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
-# Note: PORT is used by both the main API server and worker liveness check endpoint
-
-# To turn on DB authentication, you need to set up Supabase.
-USE_DB_AUTHENTICATION=false
-
-# ===== Optional ENVS ======
-
-## === AI features (JSON format on scrape, /extract API) ===
-# Provide your OpenAI API key here to enable AI features
-# OPENAI_API_KEY=
-
-# Experimental: Use Ollama
-# OLLAMA_BASE_URL=http://localhost:11434/api
-# MODEL_NAME=deepseek-r1:7b
-# MODEL_EMBEDDING_NAME=nomic-embed-text
-
-# Experimental: Use any OpenAI-compatible API
-# OPENAI_BASE_URL=https://example.com/v1
-# OPENAI_API_KEY=
-
-## === Proxy ===
-# PROXY_SERVER can be a full URL (e.g. http://0.1.2.3:1234) or just an IP and port combo (e.g. 0.1.2.3:1234)
-# Do not uncomment PROXY_USERNAME and PROXY_PASSWORD if your proxy is unauthenticated
-# PROXY_SERVER=
-# PROXY_USERNAME=
-# PROXY_PASSWORD=
-
-## === /search API ===
-# By default, the /search API will use Google search.
-
-# You can specify a SearXNG server with the JSON format enabled, if you'd like to use that instead of direct Google.
-# You can also customize the engines and categories parameters, but the defaults should also work just fine.
-# SEARXNG_ENDPOINT=http://your.searxng.server
-# SEARXNG_ENGINES=
-# SEARXNG_CATEGORIES=
-
-## === Other ===
-
-# Supabase Setup (used to support DB authentication, advanced logging, etc.)
-# SUPABASE_ANON_TOKEN=
-# SUPABASE_URL=
-# SUPABASE_SERVICE_TOKEN=
-
-# Use if you've set up authentication and want to test with a real API key
-# TEST_API_KEY=
-
-# This key lets you access the queue admin panel. Change this if your deployment is publicly accessible.
-BULL_AUTH_KEY=CHANGEME
-
-# This is now autoconfigured by the docker-compose.yaml. You shouldn't need to set it.
-# PLAYWRIGHT_MICROSERVICE_URL=http://playwright-service:3000/scrape
-# REDIS_URL=redis://redis:6379
-# REDIS_RATE_LIMIT_URL=redis://redis:6379
-
-## === PostgreSQL Database Configuration ===
-# Configure PostgreSQL credentials. These should match the credentials used by the nuq-postgres container.
-# If you change these, ensure all three are set consistently.
-# POSTGRES_USER=firecrawl
-# POSTGRES_PASSWORD=firecrawl_password
-# POSTGRES_DB=firecrawl
-
-# Set if you have a llamaparse key you'd like to use to parse pdfs
-# LLAMAPARSE_API_KEY=
-
-# Set if you'd like to send server health status messages to Slack
-# SLACK_WEBHOOK_URL=
-
-## === System Resource Configuration ===
-# Maximum CPU usage threshold (0.0-1.0). Worker will reject new jobs when CPU usage exceeds this value.
-# Default: 0.8 (80%)
-# MAX_CPU=0.8
-
-# Maximum RAM usage threshold (0.0-1.0). Worker will reject new jobs when memory usage exceeds this value.
-# Default: 0.8 (80%)
-# MAX_RAM=0.8
-
-# Set if you'd like to allow local webhooks to be sent to your self-hosted instance
-# ALLOW_LOCAL_WEBHOOKS=true
+# Allow your user to run Docker without sudo (log out and back in to apply)
+sudo usermod -aG docker $USER
 ```
 
-### Security considerations
+Verify the installation:
+
+```bash
+docker --version
+docker compose version
+```
+
+### 2. Clone the repository
+
+```bash
+git clone https://github.com/Nickolai-Brennan/Scrappy.git
+cd Scrappy
+```
+
+### 3. Configure environment variables
+
+Copy the provided template and edit the values:
+
+```bash
+cp .env.example .env
+nano .env   # or your preferred editor
+```
+
+**Minimum required changes:**
+
+| Variable | What to set |
+|----------|-------------|
+| `BULL_AUTH_KEY` | A strong random secret (e.g. `openssl rand -hex 32`) |
+| `POSTGRES_PASSWORD` | A strong password for the database |
+| `OPENAI_API_KEY` | Your key — only needed for AI/extract features |
+
+Everything else has sensible defaults for a self-hosted deployment.
+
+> **Do not commit `.env` to version control.** The `.gitignore` already excludes it.
+
+### 4. Build and start the stack
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+The API will be available on `http://YOUR_SERVER_IP:3002` once all services are healthy (allow ~60 seconds on first boot).
+
+Check health:
+
+```bash
+curl http://localhost:3002/e2e-test   # should return HTTP 200 with body "OK"
+```
+
+You can also view the Bull Queue Manager UI at:
+`http://localhost:3002/admin/<BULL_AUTH_KEY>/queues`
+
+### 5. *(Optional)* Test the API
+
+```bash
+curl -X POST http://localhost:3002/v1/crawl \
+    -H 'Content-Type: application/json' \
+    -d '{"url": "https://firecrawl.dev"}'
+```
+
+---
+
+## Operational commands
+
+| Task | Command |
+|------|---------|
+| Start all services | `docker compose up -d` |
+| Stop all services | `docker compose down` |
+| View logs (all) | `docker compose logs -f` |
+| View API logs only | `docker compose logs -f api` |
+| Restart API service | `docker compose restart api` |
+| Pull latest images & rebuild | `git pull && docker compose build && docker compose up -d` |
+| Check service health | `docker compose ps` |
+| Open a DB shell | `docker compose exec nuq-postgres psql -U postgres` |
+
+---
+
+## Security considerations
 
 - **Use strong PostgreSQL credentials.** The defaults in the `.env` template are for local development only. When deploying to a server, set `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` to secure values and ensure they match the database service configuration.
 - **Keep the database port internal.** The provided `docker-compose.yaml` does not expose PostgreSQL to the host or the internet. Avoid adding a `ports` mapping for `nuq-postgres` unless you are restricting access with a firewall. To access the database for maintenance, prefer using `docker compose exec nuq-postgres psql` or a temporary, firewalled tunnel.
 - **Protect the admin UI.** Set `BULL_AUTH_KEY` to a strong secret, especially on any deployment reachable from untrusted networks.
-
-3.  Build and run the Docker containers:
-
-    ```bash
-    docker compose build
-    docker compose up
-    ```
-
-    If you encounter an error, make sure you're using `docker compose` and not `docker-compose`.
-    
-    This will run a local instance of Firecrawl which can be accessed at `http://localhost:3002`.
-    
-    You should be able to see the Bull Queue Manager UI on `http://localhost:3002/admin/CHANGEME/queues`.
-
-5. *(Optional)* Test the API
-
-If you’d like to test the crawl endpoint, you can run this:
-
+- **Restrict port 3002 with a firewall** if you are fronting the app with Nginx/Caddy. Example (UFW):
   ```bash
-  curl -X POST http://localhost:3002/v1/crawl \
-      -H 'Content-Type: application/json' \
-      -d '{
-        "url": "https://firecrawl.dev"
-      }'
-  ```   
+  sudo ufw allow OpenSSH
+  sudo ufw allow 'Nginx Full'   # ports 80 and 443
+  sudo ufw enable
+  # Do NOT open port 3002 publicly when using a reverse proxy
+  ```
+
+---
+
+## Reverse proxy with Nginx and HTTPS (optional)
+
+A sample Nginx configuration is provided in [`deploy/nginx.conf`](deploy/nginx.conf).
+
+### Install Nginx and Certbot
+
+```bash
+sudo apt-get install -y nginx certbot python3-certbot-nginx
+```
+
+### Configure Nginx
+
+```bash
+# Copy and edit the sample config
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/scrappy
+sudo nano /etc/nginx/sites-available/scrappy
+# Replace "your-domain.example.com" with your actual domain
+
+sudo ln -s /etc/nginx/sites-available/scrappy /etc/nginx/sites-enabled/
+sudo nginx -t          # verify syntax
+sudo systemctl reload nginx
+```
+
+### Obtain a free TLS certificate (Let's Encrypt)
+
+```bash
+sudo certbot --nginx -d your-domain.example.com
+```
+
+Certbot will automatically update your Nginx config to handle HTTPS and renewal. After this step, the API is accessible at `https://your-domain.example.com`.
+
+---
+
+## Environment variables
+
+The full list of supported variables with descriptions is in [`apps/api/.env.example`](apps/api/.env.example). The root [`.env.example`](.env.example) contains the minimal subset needed for a typical self-hosted deployment.
+
+Minimal `.env` for a self-hosted deployment:
+
+```
+# ===== Required ENVS ======
+PORT=3002
+HOST=0.0.0.0
+USE_DB_AUTHENTICATION=false
+BULL_AUTH_KEY=CHANGEME
+
+# ===== Optional ENVS ======
+# OPENAI_API_KEY=
+# POSTGRES_USER=firecrawl
+# POSTGRES_PASSWORD=change_me_in_production
+# POSTGRES_DB=firecrawl
+```
+
 
 ## Troubleshooting
 
